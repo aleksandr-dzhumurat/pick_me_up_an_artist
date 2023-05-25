@@ -8,6 +8,7 @@ class Action(BaseModel):
     user_token: str
     user_name: str
     item_id: int
+    item_tag: str
     action_type: str
 
 class User(BaseModel):
@@ -30,14 +31,14 @@ async def get_item(item_id: int):
     item = content_db.get_content(item_id)
     return {"item": item}
 
-@app.get("/random")
-async def random_item():
-    item_id = content_db.get_random_content_id()
-    return {"item_id": item_id}
+@app.post("/random")
+async def random_item(user: User):
+    user_id, user_actions = users_db.get_user_actions(user.user_name)
+    return content_db.get_random_content(user_actions)
 
 @app.post("/action")
 async def action(action: Action):
-    users_db.push_action(action.user_token, action.item_id, action.action_type)
+    users_db.push_action(action.user_token, action.item_id, action.item_tag, action.action_type)
     return {"result": "ok"}
 
 @app.post("/auth")
