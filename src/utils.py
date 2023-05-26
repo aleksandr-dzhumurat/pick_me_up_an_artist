@@ -1,7 +1,7 @@
 import json
 import random
 import string
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple, List
 
 import pandas as pd
 import numpy as np
@@ -9,15 +9,48 @@ from pymongo import MongoClient
 from bson.objectid import ObjectId
 
 
+def user_tags_ranking(user_actions: Dict, all_tags_df: pd.DataFrame):
+    tags_df = all_tags_df.copy()
+    if len(user_actions) > 0:
+        user_negative_tags = pd.json_normalize([i for i in user_actions if i['action']=='dislike'])
+        if user_negative_tags.shape[0] > 0:
+            user_negative_tags = user_negative_tags['content_tag'].value_counts().to_frame(name='cnt').reset_index()
+            user_negative_tags.columns = ['content_tag', 'cnt']
+        user_positive_tags = pd.json_normalize([i for i in user_actions if i['action']=='like'])
+        if user_positive_tags.shape[0] > 0:
+            user_positive_tags = user_positive_tags['content_tag'].value_counts().to_frame(name='cnt').reset_index()
+            user_positive_tags.columns = ['content_tag', 'cnt']
+        if user_negative_tags.shape[0] > 0:  # drop disliked tags
+            tags_df = (
+                tags_df
+                .merge(user_negative_tags, how='left', left_on='tag', right_on='content_tag',suffixes=('','_neg'))
+                .query('cnt_neg.isnull()')
+                [['tag', 'cnt']]
+            )
+        if user_positive_tags.shape[0] > 0:
+            tags_df = (
+                tags_df
+                .merge(user_positive_tags, how='left', left_on='tag', right_on='content_tag',suffixes=('','_pos'))
+                .sort_values('cnt_pos', ascending=False)
+                [['tag', 'cnt', 'cnt_pos']]
+            ).head(3)  # add
+            print(tags_df.head(5))
+    return tags_df
+
+
+
 class ContentDB:
     def __init__(self):
         self.df = None  # type: Optional[pd.DataFrame]
+        self.tags_df = None  # type: Optional[pd.DataFrame]
         
     def init_db(self):
-        df = pd.read_csv('/srv/data/content_db_v01.csv')
-        print('Num rows %d' % df.shape[0])
-
-        self.df = df
+        self.df = pd.read_csv('/srv/data/content_db_v01.csv')
+        print('Num artists %d' % self.df.shape[0])
+        self.tags_df = pd.read_csv('/srv/data/content_tags_v01.csv')
+        excluded_tags = ['art']
+        self.tags_df.drop(self.tags_df[self.tags_df['tag'].isin(excluded_tags)].index, inplace=True)
+        print('Num tags %d' % self.tags_df.shape[0])
     
     def get_content(self, content_id: int) -> Dict:
         content_info = self.df.iloc[content_id].to_dict()
@@ -34,9 +67,19 @@ class ContentDB:
                     res[key] = 'Empty'
         return res
     
-    def get_random_content_id(self) -> int:
-        res = int(np.random.choice(self.df.index))
-        return res
+    def get_random_content(self, user_actions: List[Dict[str, str]], eps: float = 0.3) -> dict:
+        # bandit logic
+        if np.random.random() < eps:
+            random_tag = np.random.choice(self.tags_df['tag'])
+        else:
+            random_tag = np.random.choice(user_tags_ranking(user_actions, self.tags_df))
+        res = int(np.random.choice(
+            self.df[
+                self.df['artist_movement']
+                .apply(lambda x: random_tag in x.lower() if isinstance(x, str) else False)
+            ].index
+        ))
+        return {'item_id': res, 'item_tag': random_tag}
 
 class UserDB:
     def __init__(self):
@@ -45,16 +88,30 @@ class UserDB:
     def init_db(self):
         self.mongo = MongoClient("mongodb://artinder_mongo:27017/")
         self.user_actions = self.mongo['artswipe_db']['user_actions']
-    
-    def create_user(self, user_name: str) -> str:
-        created_user_id = (
-            self.user_actions
-            .insert_one({'name': user_name, 'actions': []})
-            .inserted_id
-        )
-        return str(created_user_id)
 
-    def push_action(self, user_id: str, content_id: str, action_type: str) -> str:
-        action = {'content_id': content_id, 'action': action_type}
+    
+    def get_user_actions(self, user_name: str) -> Tuple[str, List[Dict]]:
+        # TODO: add cache
+        user_activity = self.user_actions.find_one({'name': user_name})
+        user_actions = []
+        if user_activity is None:
+            return None, None
+        else:
+            return str(user_activity['_id']), user_activity['actions']
+
+    def create_user(self, user_name: str) -> str:
+        user_id, user_actions = self.get_user_actions(user_name)
+        if user_id is None:
+            user_id = (
+                self.user_actions
+                .insert_one({'name': user_name, 'actions': []})
+                .inserted_id
+            )
+        else:
+            logger.info('User already exists')
+        return str(user_id)
+
+    def push_action(self, user_id: str, content_id: str, content_tag: str, action_type: str) -> str:
+        action = {'content_id': content_id, 'content_tag': content_tag,'action': action_type}
         self.user_actions.update_one({'_id': ObjectId(user_id)}, {'$push': {'actions': action}})
         return True

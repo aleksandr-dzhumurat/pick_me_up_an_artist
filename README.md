@@ -7,8 +7,16 @@ Pick me up an artist: painter recommendations based on swipes
 make build
 ```
 
+Start API
+
 ```shell
 make run
+```
+
+Start Streamlit client
+
+```shell
+make run-frontend
 ```
 
 Check browser [0.0.0.0:8080](http://0.0.0.0:8080/)
