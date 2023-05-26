@@ -35,7 +35,7 @@ stop:
 	docker rm -f ${PROJECT_NAME}_container
 
 run-frontend: build-network
-	docker run -it --rm \
+	docker run -d --rm \
 	    --env-file ${CURRENT_DIR}/.env \
 	    -p ${STREAMLIT_PORT}:${STREAMLIT_PORT} \
 	    -v "${CURRENT_DIR}/frontend_app:/srv/src" \

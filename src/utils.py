@@ -9,16 +9,47 @@ from pymongo import MongoClient
 from bson.objectid import ObjectId
 
 
+def user_tags_ranking(user_actions: Dict, all_tags_df: pd.DataFrame):
+    tags_df = all_tags_df.copy()
+    if len(user_actions) > 0:
+        user_negative_tags = pd.json_normalize([i for i in user_actions if i['action']=='dislike'])
+        if user_negative_tags.shape[0] > 0:
+            user_negative_tags = user_negative_tags['content_tag'].value_counts().to_frame(name='cnt').reset_index()
+            user_negative_tags.columns = ['content_tag', 'cnt']
+        user_positive_tags = pd.json_normalize([i for i in user_actions if i['action']=='like'])
+        if user_positive_tags.shape[0] > 0:
+            user_positive_tags = user_positive_tags['content_tag'].value_counts().to_frame(name='cnt').reset_index()
+            user_positive_tags.columns = ['content_tag', 'cnt']
+        if user_negative_tags.shape[0] > 0:  # drop disliked tags
+            tags_df = (
+                tags_df
+                .merge(user_negative_tags, how='left', left_on='tag', right_on='content_tag',suffixes=('','_neg'))
+                .query('cnt_neg.isnull()')
+                [['tag', 'cnt']]
+            )
+        if user_positive_tags.shape[0] > 0:
+            tags_df = (
+                tags_df
+                .merge(user_positive_tags, how='left', left_on='tag', right_on='content_tag',suffixes=('','_pos'))
+                .sort_values('cnt_pos', ascending=False)
+                [['tag', 'cnt', 'cnt_pos']]
+            ).head(3)  # add
+            print(tags_df.head(5))
+    return tags_df
+
+
+
 class ContentDB:
     def __init__(self):
         self.df = None  # type: Optional[pd.DataFrame]
         self.tags_df = None  # type: Optional[pd.DataFrame]
         
     def init_db(self):
-        df = pd.read_csv('/srv/data/content_db_v01.csv')
-        print('Num artists %d' % df.shape[0])
-        self.df = df
+        self.df = pd.read_csv('/srv/data/content_db_v01.csv')
+        print('Num artists %d' % self.df.shape[0])
         self.tags_df = pd.read_csv('/srv/data/content_tags_v01.csv')
+        excluded_tags = ['art']
+        self.tags_df.drop(self.tags_df[self.tags_df['tag'].isin(excluded_tags)].index, inplace=True)
         print('Num tags %d' % self.tags_df.shape[0])
     
     def get_content(self, content_id: int) -> Dict:
@@ -36,42 +67,12 @@ class ContentDB:
                     res[key] = 'Empty'
         return res
     
-    def get_random_content(self, user_actions: List[Dict[str, str]]) -> dict:
-        if len(user_actions) > 0:
-            user_negative_tags = pd.json_normalize([i for i in user_actions if i['action']=='dislike'])
-            if user_negative_tags.shape[0] > 0:
-                user_negative_tags = user_negative_tags.content_tag.value_counts().to_frame(name='cnt').reset_index()
-                user_negative_tags.columns = ['content_tag', 'cnt']
-            user_positive_tags = pd.json_normalize([i for i in user_actions if i['action']=='like'])
-            if user_positive_tags.shape[0] > 0:
-                user_positive_tags = user_positive_tags.content_tag.value_counts().to_frame(name='cnt').reset_index()
-                user_positive_tags.columns = ['content_tag', 'cnt']
-            # print(user_positive_tags)
-            # drop disliked tags
-            tags_df = self.tags_df
-            if user_negative_tags.shape[0] > 0:
-                print('Positive filtered')
-                print(user_negative_tags)
-                tags_df = (
-                    tags_df
-                    .merge(user_negative_tags, how='left', left_on='tag', right_on='content_tag',suffixes=('','_neg'))
-                    .query('cnt_neg.isnull()')
-                    [['tag', 'cnt']]
-                )
-            if user_positive_tags.shape[0] > 0:
-                print('Negative filtered')
-                print(user_positive_tags)
-                #print(tags_df.merge(user_positive_tags, how='left', left_on='tag', right_on='content_tag',suffixes=('','_pos')))
-                #print(tags_df.merge(user_positive_tags, how='left', left_on='tag', right_on='content_tag',suffixes=('','_pos')))
-                tags_df = (
-                    tags_df
-                    .merge(user_positive_tags, how='left', left_on='tag', right_on='content_tag',suffixes=('','_pos'))
-                    .sort_values('cnt_pos', ascending=False)
-                    [['tag', 'cnt']]
-                )
+    def get_random_content(self, user_actions: List[Dict[str, str]], eps: float = 0.3) -> dict:
+        # bandit logic
+        if np.random.random() < eps:
+            random_tag = np.random.choice(self.tags_df['tag'])
         else:
-            tags_df = self.tags_df
-        random_tag = np.random.choice(tags_df['tag'])
+            random_tag = np.random.choice(user_tags_ranking(user_actions, self.tags_df))
         res = int(np.random.choice(
             self.df[
                 self.df['artist_movement']
