@@ -1,3 +1,7 @@
+# torch
+torch==2.0
+sentence-transformers==2.2.2
+#
 anyio==3.5.0
 asgiref==3.5.0
 click==8.1.2
