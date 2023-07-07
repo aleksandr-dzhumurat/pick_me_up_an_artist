@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 
-from src.utils import ContentDB, UserDB
+from src.utils import ContentDB, UserDB, GalleryDB
 
 class Action(BaseModel):
     user_token: str
@@ -19,6 +19,9 @@ content_db.init_db()
 #
 users_db = UserDB()
 users_db.init_db()
+#
+galleries_db = GalleryDB()
+galleries_db.init_db()
 
 app = FastAPI()
 
@@ -46,3 +49,9 @@ async def auth(user: User):
     print(user.dict())
     bearer_token = users_db.create_user(user.user_name)
     return {"Bearer": bearer_token}
+
+@app.post("/recommend")
+async def auth(user: User):
+    user_id, user_actions = users_db.get_user_actions(user.user_name)
+    rec = galleries_db.recommend(user_actions)
+    return {"rec": rec}

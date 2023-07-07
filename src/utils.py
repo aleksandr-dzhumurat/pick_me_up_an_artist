@@ -1,4 +1,6 @@
 import json
+import logging
+import os
 import random
 import string
 from typing import Optional, Dict, Tuple, List
@@ -7,6 +9,23 @@ import pandas as pd
 import numpy as np
 from pymongo import MongoClient
 from bson.objectid import ObjectId
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+
+MONGO_HOST = os.environ['MONGO_HOST']
+
+
+# from utils import logger
+logger = logging.getLogger('my_logger')
+logging.basicConfig(format='%(asctime)s: %(message)s', level=logging.INFO)
+
+model_name = 'all-mpnet-base-v2'
+model_local_cache = os.path.join('/srv/data/models', model_name)
+if not os.path.exists(model_local_cache):
+    embedder = SentenceTransformer(model_name, cache_folder='/srv/data/models')
+else:
+    print('Loading pytorch embedder from cache...')
+    embedder = SentenceTransformer(model_local_cache)
 
 
 def user_tags_ranking(user_actions: Dict, all_tags_df: pd.DataFrame):
@@ -38,7 +57,6 @@ def user_tags_ranking(user_actions: Dict, all_tags_df: pd.DataFrame):
     return tags_df
 
 
-
 class ContentDB:
     def __init__(self):
         self.df = None  # type: Optional[pd.DataFrame]
@@ -68,11 +86,13 @@ class ContentDB:
         return res
     
     def get_random_content(self, user_actions: List[Dict[str, str]], eps: float = 0.3) -> dict:
+        print(user_actions)
         # bandit logic
-        if np.random.random() < eps:
+        if np.random.random() < eps or len(user_actions) == 0:
             random_tag = np.random.choice(self.tags_df['tag'])
         else:
-            random_tag = np.random.choice(user_tags_ranking(user_actions, self.tags_df))
+            random_tag = np.random.choice(user_tags_ranking(user_actions, self.tags_df)['tag'].values)
+        logger.info('random tag: %s', random_tag)
         res = int(np.random.choice(
             self.df[
                 self.df['artist_movement']
@@ -86,9 +106,8 @@ class UserDB:
         self.mongo = None
     
     def init_db(self):
-        self.mongo = MongoClient("mongodb://artinder_mongo:27017/")
+        self.mongo = MongoClient(f'mongodb://{MONGO_HOST}:27017/')
         self.user_actions = self.mongo['artswipe_db']['user_actions']
-
     
     def get_user_actions(self, user_name: str) -> Tuple[str, List[Dict]]:
         # TODO: add cache
@@ -115,3 +134,56 @@ class UserDB:
         action = {'content_id': content_id, 'content_tag': content_tag,'action': action_type}
         self.user_actions.update_one({'_id': ObjectId(user_id)}, {'$push': {'actions': action}})
         return True
+
+
+class GalleryDB:
+    def __init__(self):
+        self.df = None  # type: Optional[pd.DataFrame]
+        self.embedder = embedder
+        
+    def init_db(self):
+        self.df = pd.read_csv('/srv/data/exhibitions_db_v01.csv')
+        print('Num gallerys %d' % self.df.shape[0])
+        self.df.drop(self.df[self.df['exhibition_description'].isna()].index, inplace=True)
+        print('Num gallerys after filtering %d' % self.df.shape[0])
+        # vectorizing model
+        embeds_path = '/srv/data/embeds.npy'
+        if not os.path.exists(embeds_path):
+            logger.info('Evaluating_embeds')
+            raw_corpus = self.df['exhibition_description'].values
+            index = self.embedder.encode(raw_corpus, show_progress_bar=True)
+            self.index = np.array([embedding for embedding in index]).astype("float32")
+            np.save(embeds_path, self.index)
+        else:
+            logger.info('Loading embeds from %s', embeds_path)
+            self.index = np.load(embeds_path)
+        logger.info('Embeds created %d', self.index.shape[0])
+    
+    def get_content(self, content_id: Optional[int]) -> Dict:
+        if content_id is None:
+            content_id = np.random.choice(self.df.index)
+        content_info = self.df.iloc[content_id].to_dict()
+        res = {}
+        res.update({'name': content_info['galery_name']})
+        res.update({'exhibition_link': content_info['exhibition_link']})
+        imgs = json.loads(content_info['gallery_imgs'])
+        gallery_img = ''
+        if len(imgs) > 0:
+            gallery_img = np.random.choice(imgs)
+        res.update({'exhibition_link': content_info['exhibition_link'], 'gallery_img': gallery_img})
+        res.update({'artist_link': content_info['artist_link']})
+        return res
+    
+    def recommend(self, user_actions: List[Dict[str, str]]) -> dict:
+        user_positive_tags = [i['content_tag'] for i in user_actions if i['action']=='like']
+        user_pref = ''
+        if len(user_positive_tags) > 0:
+            user_pref = ' '.join(user_positive_tags)
+            query_embed = self.embedder.encode(user_pref).reshape(1, -1)
+            sim = cosine_similarity(query_embed, self.index)[0]
+            most_similar_id = np.argsort(-sim)[0]
+            top_gallery = self.get_content(most_similar_id)
+        else:
+            logger.info('random recommendation')
+            top_gallery = self.get_content(None)
+        return {'gallery': top_gallery, 'tags': user_pref}

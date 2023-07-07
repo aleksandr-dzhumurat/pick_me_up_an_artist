@@ -59,25 +59,39 @@ def main():
         st.session_state['session_started'] = True
         st.session_state['user_token'] = user_token
         st.session_state['user_name'] = user_name
+        st.session_state['content_count'] = 0
         logger.info('Session start for %s', user_name)
     
     if 'session_started' in st.session_state.keys() and st.session_state['session_started'] is True:
-        user_name = st.session_state['user_name']
-        user_token = st.session_state['user_token']  # exists for sure because session is already started
-        random_artist = request_random_artist_json()
-        artist_id = random_artist['item']['artist_id']
-        col1, col2 = st.columns([2,1], gap='large')
-        with col1:
-            like_button = st.button('🤩')
-        with col2:
-            dislike_button = st.button('🥴')
-        if like_button:
-            do_action('like', artist_id, random_artist['tag'], user_token, user_name)
-        if dislike_button:
-            do_action('dislike', artist_id, random_artist['tag'], user_token, user_name)
+        if st.session_state['content_count'] == 5:
+            user_data = {'user_name': st.session_state['user_name']}
+            rec_url = 'http://pickupartist_container:8090/recommend'
+            res = requests.post(rec_url, json = user_data).json()['rec']
+            st.write('We recommend you based on your tags: %s' % res['tags'])
+            gallery = res['gallery']
+            st.write(gallery['exhibition_link'])
+            print(gallery['gallery_img'])
+            st.image(gallery['gallery_img'], caption=gallery['name'])
+        else:
+            st.session_state['content_count'] = st.session_state['content_count'] + 1
+            user_name = st.session_state['user_name']
+            user_token = st.session_state['user_token']  # exists for sure because session is already started
+            random_artist = request_random_artist_json()
+            artist_id = random_artist['item']['artist_id']
+            col1, col2, col3 = st.columns([1, 2, 1], gap='large')
+            with col1:
+                like_button = st.button('🤩')
+            with col2:
+                st.write('%d of 10' % st.session_state['content_count'])
+            with col3:
+                dislike_button = st.button('🥴')
+            if like_button:
+                do_action('like', artist_id, random_artist['tag'], user_token, user_name)
+            if dislike_button:
+                do_action('dislike', artist_id, random_artist['tag'], user_token, user_name)
 
-        st.image(random_artist['item']['artworks'], caption=random_artist['item']['artwork_name'])
-        st.write(f"""[{random_artist['item']['artist_name']}]({random_artist['item']['artist_url']}), {random_artist['item']['field']}, {random_artist['item']['artist_movement']}""")
+            st.image(random_artist['item']['artworks'], caption=random_artist['item']['artwork_name'])
+            st.write(f"""[{random_artist['item']['artist_name']}]({random_artist['item']['artist_url']}), {random_artist['item']['field']}, {random_artist['item']['artist_movement']}""")
 
 if __name__ == '__main__':
     main()

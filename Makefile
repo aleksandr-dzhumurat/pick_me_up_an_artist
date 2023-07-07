@@ -13,7 +13,24 @@ build:
 build-frontend:
 	docker build -f Dockerfile.streamlit -t ${PROJECT_NAME}:frontend .
 
-run: build-network
+stop:
+	docker rm -f ${PROJECT_NAME}_container || true
+
+stop-mongo:
+	docker rm -f ${PROJECT_NAME}_mongo_container || true
+
+stop-frontend:
+	docker rm -f ${PROJECT_NAME}_container || true
+
+run-mongo: stop-mongo
+	docker run -d \
+		-v "${CURRENT_DIR}//data/mongo_data:/data/db" \
+		--name ${PROJECT_NAME}_mongo_container \
+		--network service_network \
+		-p 27018:27017 \
+		mongo:6.0.5
+
+run: stop build-network run-mongo
 	docker run -it --rm \
 	    --env-file ${CURRENT_DIR}/.env \
 	    -p ${FASTAPI_PORT}:${FASTAPI_PORT} \
@@ -30,9 +47,6 @@ run-debug:
 	    -v "${CURRENT_DIR}/data:/srv/data" \
 	    --name ${PROJECT_NAME}_container \
 	    ${PROJECT_NAME}:dev bash
-
-stop:
-	docker rm -f ${PROJECT_NAME}_container
 
 run-frontend: build-network
 	docker run -d --rm \
