@@ -30,7 +30,11 @@ run-mongo: stop-mongo
 		-p 27018:27017 \
 		mongo:6.0.5
 
-run: stop build-network run-mongo
+prepare_data:
+	rm -rf data/03_service_data && \
+		cp -r /Users/username/PycharmProjects/wikiart_data_scraper/data/03_service_data data
+
+run: stop build-network run-mongo prepare_data
 	docker run -it --rm \
 	    --env-file ${CURRENT_DIR}/.env \
 	    -p ${FASTAPI_PORT}:${FASTAPI_PORT} \

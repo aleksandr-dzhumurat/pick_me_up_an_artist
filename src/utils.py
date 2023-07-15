@@ -7,26 +7,32 @@ from typing import Optional, Dict, Tuple, List
 
 import pandas as pd
 import numpy as np
+import yaml
 from pymongo import MongoClient
 from bson.objectid import ObjectId
-from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
+from src.prepare_data import load_embedder
+
 MONGO_HOST = os.environ['MONGO_HOST']
-
-
-# from utils import logger
 logger = logging.getLogger('my_logger')
 logging.basicConfig(format='%(asctime)s: %(message)s', level=logging.INFO)
 
-model_name = 'all-mpnet-base-v2'
-model_local_cache = os.path.join('/srv/data/models', model_name)
-if not os.path.exists(model_local_cache):
-    embedder = SentenceTransformer(model_name, cache_folder='/srv/data/models')
-else:
-    print('Loading pytorch embedder from cache...')
-    embedder = SentenceTransformer(model_local_cache)
+embedder = load_embedder()
 
+
+def load_config() -> dict:
+    config_path = os.getenv("CONFIG_PATH", "config.yml")
+    with open(config_path, "r") as f:
+        config = yaml.load(f, Loader=yaml.FullLoader)
+    return config
+
+
+config = load_config()
+
+def artifact_path(artifact_name: str):
+    artifacts_dirname  = f"{config['data_version']}_service_data"
+    return os.path.join(config['root_data_dir'], artifacts_dirname, artifact_name)
 
 def user_tags_ranking(user_actions: Dict, all_tags_df: pd.DataFrame):
     tags_df = all_tags_df.copy()
@@ -63,9 +69,9 @@ class ContentDB:
         self.tags_df = None  # type: Optional[pd.DataFrame]
         
     def init_db(self):
-        self.df = pd.read_csv('/srv/data/content_db_v01.csv')
+        self.df = pd.read_csv(artifact_path('content_db.csv.gz'), compression='gzip')
         print('Num artists %d' % self.df.shape[0])
-        self.tags_df = pd.read_csv('/srv/data/content_tags_v01.csv')
+        self.tags_df = pd.read_csv(artifact_path('tags_db.csv.gz'), compression='gzip').query('cnt > 1')
         excluded_tags = ['art']
         self.tags_df.drop(self.tags_df[self.tags_df['tag'].isin(excluded_tags)].index, inplace=True)
         print('Num tags %d' % self.tags_df.shape[0])
@@ -95,7 +101,7 @@ class ContentDB:
         logger.info('random tag: %s', random_tag)
         res = int(np.random.choice(
             self.df[
-                self.df['artist_movement']
+                self.df['art_tags']  # artist_movement
                 .apply(lambda x: random_tag in x.lower() if isinstance(x, str) else False)
             ].index
         ))
@@ -140,14 +146,24 @@ class GalleryDB:
     def __init__(self):
         self.df = None  # type: Optional[pd.DataFrame]
         self.embedder = embedder
+    
+    def validate_galleries(self):
+        df_filter = self.df['exhibition_description'].isna()
+        self.df.drop(self.df[df_filter].index, inplace=True)
+
+        df_filter = self.df['gallery_imgs'].isna()
+        self.df.drop(self.df[df_filter].index, inplace=True)
+
+        df_filter = self.df['gallery_imgs'].apply(lambda x: len(x) == 0)
+        self.df.drop(self.df[df_filter].index, inplace=True)
         
     def init_db(self):
-        self.df = pd.read_csv('/srv/data/exhibitions_db_v01.csv')
+        self.df = pd.read_csv(artifact_path('exhibitions_db.csv.gz'), compression='gzip')
         print('Num gallerys %d' % self.df.shape[0])
-        self.df.drop(self.df[self.df['exhibition_description'].isna()].index, inplace=True)
+        self.validate_galleries()
         print('Num gallerys after filtering %d' % self.df.shape[0])
         # vectorizing model
-        embeds_path = '/srv/data/embeds.npy'
+        embeds_path = artifact_path('embeds.npy')
         if not os.path.exists(embeds_path):
             logger.info('Evaluating_embeds')
             raw_corpus = self.df['exhibition_description'].values
@@ -166,12 +182,20 @@ class GalleryDB:
         res = {}
         res.update({'name': content_info['galery_name']})
         res.update({'exhibition_link': content_info['exhibition_link']})
-        imgs = json.loads(content_info['gallery_imgs'])
+        imgs_raw = content_info['gallery_imgs']
+        logger.info('id: %d, type: %s, IMG: %s', content_id, type(imgs_raw), imgs_raw)
+        # imgs = json.loads(imgs_raw)
+        imgs = eval(imgs_raw)  # TODO: find a bug with JSON
         gallery_img = ''
         if len(imgs) > 0:
             gallery_img = np.random.choice(imgs)
         res.update({'exhibition_link': content_info['exhibition_link'], 'gallery_img': gallery_img})
-        res.update({'artist_link': content_info['artist_link']})
+        if not isinstance(content_info['artist_link'], str):
+            artist_link = content_info['exhibition_link']
+        else:
+            artist_link = content_info['artist_link']
+        res.update({'artist_link': artist_link})
+        print('RES', res)
         return res
     
     def recommend(self, user_actions: List[Dict[str, str]]) -> dict:
