@@ -69,9 +69,9 @@ class ContentDB:
         self.tags_df = None  # type: Optional[pd.DataFrame]
         
     def init_db(self):
-        self.df = pd.read_csv(artifact_path('content_db.csv'))
+        self.df = pd.read_csv(artifact_path('content_db.csv.gz'), compression='gzip')
         print('Num artists %d' % self.df.shape[0])
-        self.tags_df = pd.read_csv(artifact_path('tags_db.csv')).query('cnt > 1')
+        self.tags_df = pd.read_csv(artifact_path('tags_db.csv.gz'), compression='gzip').query('cnt > 1')
         excluded_tags = ['art']
         self.tags_df.drop(self.tags_df[self.tags_df['tag'].isin(excluded_tags)].index, inplace=True)
         print('Num tags %d' % self.tags_df.shape[0])
@@ -101,7 +101,7 @@ class ContentDB:
         logger.info('random tag: %s', random_tag)
         res = int(np.random.choice(
             self.df[
-                self.df['art_movement_raw_tags']  # artist_movement
+                self.df['art_tags']  # artist_movement
                 .apply(lambda x: random_tag in x.lower() if isinstance(x, str) else False)
             ].index
         ))
@@ -158,7 +158,7 @@ class GalleryDB:
         self.df.drop(self.df[df_filter].index, inplace=True)
         
     def init_db(self):
-        self.df = pd.read_csv(artifact_path('exhibitions_db.csv'))
+        self.df = pd.read_csv(artifact_path('exhibitions_db.csv.gz'), compression='gzip')
         print('Num gallerys %d' % self.df.shape[0])
         self.validate_galleries()
         print('Num gallerys after filtering %d' % self.df.shape[0])

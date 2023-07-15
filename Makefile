@@ -31,7 +31,8 @@ run-mongo: stop-mongo
 		mongo:6.0.5
 
 prepare_data:
-	cp -r /Users/username/PycharmProjects/wikiart_data_scraper/data/03_service_data data
+	rm -rf data/03_service_data && \
+		cp -r /Users/username/PycharmProjects/wikiart_data_scraper/data/03_service_data data
 
 run: stop build-network run-mongo prepare_data
 	docker run -it --rm \
